@@ -189,6 +189,42 @@ def build_code() -> None:
         ('width="89"', 'width="92"'),
     ])
 
+    # Avatars: give every upload a fresh URL so browsers never show a stale photo,
+    # and shorten the avatar cache from 24h to 5 min.
+    patch("packages/lib/server/avatar.ts", [
+        ("  const objectKey = existing?.objectKey ?? uuidv4();",
+         "  // TechMavie: always issue a new key so a new upload gets a new URL\n"
+         "  void existing;\n"
+         "  const objectKey = uuidv4();"),
+        ("      data: processedData,\n      // Don't update objectKey - keep existing to preserve URLs\n",
+         "      data: processedData,\n      objectKey,\n"),
+    ])
+    patch("apps/web/app/api/avatar/[uuid]/route.ts", [
+        ('"Cache-Control": "max-age=86400"', '"Cache-Control": "public, max-age=300"'),
+    ])
+
+    # Onboarding: Teams were removed from Cal.diy - hide the paid "With my team" plan
+    patch("apps/web/modules/onboarding/getting-started/onboarding-view.tsx", [
+        ('    if (plan.id === "organization") {\n      return false;\n    }',
+         '    if (plan.id === "organization" || plan.id === "team") {\n      return false;\n    }'),
+    ])
+    import re
+    badge_re = re.compile(r'("onboarding_plan_team_badge":\s*)"(?:[^"\\\\]|\\\\.)*"')
+    for path in sorted((ROOT / "packages/i18n/locales").glob("*/common.json")):
+        text = path.read_text()
+        new_text = badge_re.sub(r'\1""', text)
+        if new_text != text:
+            path.write_text(new_text)
+    print("  patch  onboarding team plan hidden, price text removed")
+
+    # Single-owner instance: bake "signups disabled" into the build
+    # (NEXT_PUBLIC_* values are inlined at build time, so .env alone is not enough)
+    patch("Dockerfile", [
+        ("ARG CSP_POLICY\n", "ARG CSP_POLICY\nARG NEXT_PUBLIC_DISABLE_SIGNUP=true\n"),
+        ("  BUILD_STANDALONE=true \\\n",
+         "  BUILD_STANDALONE=true \\\n  NEXT_PUBLIC_DISABLE_SIGNUP=$NEXT_PUBLIC_DISABLE_SIGNUP \\\n"),
+    ])
+
     manifest_path = PUB / "site.webmanifest"
     manifest = json.loads(manifest_path.read_text())
     manifest.update({
