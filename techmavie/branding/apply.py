@@ -217,6 +217,14 @@ def build_code() -> None:
             path.write_text(new_text)
     print("  patch  onboarding team plan hidden, price text removed")
 
+    # HitPay: the checkout lives on checkout.hit-pay.com (an external site). Next's
+    # router.replace() cannot navigate cross-origin and crashes the payment page,
+    # so do a real browser redirect instead.
+    patch("apps/web/components/apps/hitpay/HitpayPaymentComponent.tsx", [
+        ("        router.replace(parsedData.data.url);\n",
+         "        window.location.replace(parsedData.data.url);\n"),
+    ])
+
     # Single-owner instance: bake "signups disabled" into the build
     # (NEXT_PUBLIC_* values are inlined at build time, so .env alone is not enough)
     patch("Dockerfile", [
