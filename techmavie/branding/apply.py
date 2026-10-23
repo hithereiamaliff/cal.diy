@@ -140,6 +140,143 @@ def patch(rel: str, pairs) -> None:
     print(f"  patch  {rel} ({len(pairs)} edits)")
 
 
+# Payment page: upstream ships /payment/[uid] with a placeholder loader that never
+# reads the database (calcom/cal.diy#29721), so the page crashes with "RangeError:
+# Invalid time value" and the HitPay redirect never mounts. Swap in a real loader.
+# Once upstream fixes it, the stub no longer matches and this patch can be dropped.
+PAYMENT_PAGE_STUB = '''\
+const getData = withAppDirSsr<PaymentPageProps>(async () => ({
+  props: {
+    payment: {
+      id: 0,
+      success: false,
+      refunded: false,
+      amount: 0,
+      currency: "usd",
+      paymentOption: null,
+      data: {},
+      appId: null,
+    },
+    booking: {
+      id: 0,
+      uid: "",
+      title: "",
+      startTime: "",
+      endTime: "",
+      status: "",
+      paid: false,
+      location: null,
+    },
+    eventType: { id: 0, title: "", length: 0, price: 0, currency: "usd", metadata: null },
+    profile: { theme: null, hideBranding: false },
+  },
+}));
+'''
+
+PAYMENT_PAGE_LOADER = '''\
+const toRecord = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+const getData = withAppDirSsr<PaymentPageProps>(async (context) => {
+  const uid = context.params?.uid;
+  if (typeof uid !== "string") return { notFound: true } as const;
+
+  const payment = await prisma.payment.findUnique({
+    where: { uid },
+    select: {
+      id: true,
+      success: true,
+      refunded: true,
+      amount: true,
+      currency: true,
+      paymentOption: true,
+      data: true,
+      appId: true,
+      booking: {
+        select: {
+          id: true,
+          uid: true,
+          title: true,
+          description: true,
+          startTime: true,
+          endTime: true,
+          status: true,
+          paid: true,
+          location: true,
+          user: { select: { name: true, username: true, theme: true, hideBranding: true } },
+          eventType: {
+            select: {
+              id: true,
+              title: true,
+              length: true,
+              price: true,
+              currency: true,
+              metadata: true,
+              successRedirectUrl: true,
+              forwardParamsSuccessRedirect: true,
+              recurringEvent: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const booking = payment?.booking;
+  const eventType = booking?.eventType;
+  if (!payment || !booking || !eventType) return { notFound: true } as const;
+
+  // A stale payment link must never send the client to a live checkout for a booking that is gone
+  if (booking.status === BookingStatus.CANCELLED || booking.status === BookingStatus.REJECTED) {
+    return { redirect: { destination: `/booking/${booking.uid}`, permanent: false } };
+  }
+
+  const { user } = booking;
+  return {
+    props: {
+      payment: {
+        id: payment.id,
+        success: payment.success,
+        refunded: payment.refunded,
+        amount: payment.amount,
+        currency: payment.currency,
+        paymentOption: payment.paymentOption,
+        data: toRecord(payment.data) ?? {},
+        appId: payment.appId,
+      },
+      clientSecret: null,
+      booking: {
+        id: booking.id,
+        uid: booking.uid,
+        title: booking.title,
+        description: booking.description,
+        startTime: booking.startTime.toISOString(),
+        endTime: booking.endTime.toISOString(),
+        status: booking.status,
+        paid: booking.paid,
+        location: booking.location,
+      },
+      eventType: {
+        id: eventType.id,
+        title: eventType.title,
+        length: eventType.length,
+        price: eventType.price,
+        currency: eventType.currency,
+        metadata: toRecord(eventType.metadata),
+        successRedirectUrl: eventType.successRedirectUrl,
+        forwardParamsSuccessRedirect: eventType.forwardParamsSuccessRedirect,
+        recurringEvent: eventType.recurringEvent,
+      },
+      profile: { theme: user?.theme ?? null, hideBranding: user?.hideBranding ?? false },
+      user: user ? { name: user.name, username: user.username } : null,
+    },
+  };
+});
+'''
+
+
 def build_code() -> None:
     patch("packages/lib/constants.ts", [
         ('process.env.NEXT_PUBLIC_WEBSITE_URL) || "https://cal.com"',
@@ -223,6 +360,15 @@ def build_code() -> None:
     patch("apps/web/components/apps/hitpay/HitpayPaymentComponent.tsx", [
         ("        router.replace(parsedData.data.url);\n",
          "        window.location.replace(parsedData.data.url);\n"),
+    ])
+
+    # Payment page: real data loader instead of upstream's placeholder (see PAYMENT_PAGE_STUB)
+    patch("apps/web/app/(use-page-wrapper)/payment/[uid]/page.tsx", [
+        ('import { APP_NAME } from "@calcom/lib/constants";\n',
+         'import { APP_NAME } from "@calcom/lib/constants";\n'
+         'import prisma from "@calcom/prisma";\n'
+         'import { BookingStatus } from "@calcom/prisma/enums";\n'),
+        (PAYMENT_PAGE_STUB, PAYMENT_PAGE_LOADER),
     ])
 
     # Single-owner instance: bake "signups disabled" into the build
