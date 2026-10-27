@@ -362,6 +362,15 @@ def build_code() -> None:
          "        window.location.replace(parsedData.data.url);\n"),
     ])
 
+    # HitPay: the buyer can land on the booking page a few seconds before HitPay's
+    # webhook marks the payment paid, so a paid booking showed "awaiting payment".
+    # Pass Stripe's redirect_status=succeeded, which the booking page already reads
+    # to show the confirmed wording. Display only: the webhook still records payment.
+    patch("packages/app-store/hitpay/api/callback.ts", [
+        ("    isSuccessBookingPage: true,\n",
+         '    isSuccessBookingPage: true,\n    redirect_status: "succeeded",\n'),
+    ])
+
     # Payment page: real data loader instead of upstream's placeholder (see PAYMENT_PAGE_STUB)
     patch("apps/web/app/(use-page-wrapper)/payment/[uid]/page.tsx", [
         ('import { APP_NAME } from "@calcom/lib/constants";\n',
