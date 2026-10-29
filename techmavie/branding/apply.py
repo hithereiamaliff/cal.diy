@@ -371,6 +371,22 @@ def build_code() -> None:
          '    isSuccessBookingPage: true,\n    redirect_status: "succeeded",\n'),
     ])
 
+    # HitPay: the event-type price box only took whole units (step="1", and the
+    # shown value was floored), so a price such as MYR 399.99 could not be set.
+    # Match the Stripe app's box; the stored amount was already in cents.
+    patch("packages/app-store/hitpay/components/EventTypeAppSettingsInterface.tsx", [
+        ("  const disableDecimalPlace = (value: number) => {\n"
+         "    const nValue = Math.floor(value);\n"
+         "    const sValue = nValue.toString();\n"
+         "    const ret = parseInt(sValue);\n"
+         "    return ret;\n"
+         "  };\n\n",
+         ""),
+        ('              step="1"\n', '              step="0.01"\n'),
+        ("                  ? disableDecimalPlace(convertFromSmallestToPresentableCurrencyUnit(price, currency))\n",
+         "                  ? convertFromSmallestToPresentableCurrencyUnit(price, currency)\n"),
+    ])
+
     # Payment page: real data loader instead of upstream's placeholder (see PAYMENT_PAGE_STUB)
     patch("apps/web/app/(use-page-wrapper)/payment/[uid]/page.tsx", [
         ('import { APP_NAME } from "@calcom/lib/constants";\n',
